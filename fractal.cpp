@@ -73,6 +73,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
             xMax = centerX + newWidth / 2;
             yMin = centerY - newHeight / 2;
             yMax = centerY + newHeight / 2;
+
+            // Print the new center coordinates to the console
+            std::cout << "Current Center Coordinates: (" << centerX << ", " << centerY << ")\n";
         }
 
         InvalidateRect(hwnd, nullptr, TRUE); // Redraw window
