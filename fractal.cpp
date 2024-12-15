@@ -122,10 +122,6 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         long double newWidth = (xMax - xMin) * zoomFactor;
         long double newHeight = (yMax - yMin) * zoomFactor;
 
-  
-        long double centerX = (xMax + xMin) / 2;
-        long double centerY = (yMax + yMin) / 2;
-
         xMin = centerX - newWidth / 2;
         xMax = centerX + newWidth / 2;
         yMin = centerY - newHeight / 2;
