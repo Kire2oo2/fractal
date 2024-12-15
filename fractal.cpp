@@ -4,18 +4,22 @@
 #include <thread>
 #include <atomic>
 #include <iostream>
+#include <string>
 
 const int WIDTH = 800;
 const int HEIGHT = 800;
 const int MAX_ITER = 1000;
 
 std::atomic<bool> running(true);
+std::atomic<int> currentMaxIter(MAX_ITER);
 
 long double xMin = -2.0, xMax = 1.0;
 long double yMin = -1.5, yMax = 1.5;
 
-// Limit the zoom level to prevent too much precision loss
-const long double MIN_ZOOM = 0.0000001;
+long double initialXMin = -2.0, initialXMax = 1.0;
+long double initialYMin = -1.5, initialYMax = 1.5;
+
+HWND hwnd = nullptr; 
 
 void drawMandelbrot(HDC hdc) {
     for (int px = 0; px < WIDTH; ++px) {
@@ -27,12 +31,7 @@ void drawMandelbrot(HDC hdc) {
             std::complex<long double> z(0, 0);
             int iterations = 0;
 
-            // Dynamically reduce iterations as zoom level increases
-            int dynamicMaxIter = MAX_ITER;
-            if ((xMax - xMin) < 0.0001) { // Adjust threshold as needed
-                dynamicMaxIter = 500; // Reduce iterations for deep zooms
-            }
-
+            int dynamicMaxIter = currentMaxIter.load();
             while (std::abs(z) <= 2.0 && iterations < dynamicMaxIter) {
                 z = z * z + c;
                 ++iterations;
@@ -43,6 +42,62 @@ void drawMandelbrot(HDC hdc) {
                 : RGB(iterations % 256, iterations % 256, iterations % 256);
 
             SetPixel(hdc, px, py, color);
+        }
+    }
+}
+
+void handleUserInput() {
+    while (running) {
+        std::string command;
+        std::cout << "Enter command (iterations <number>, reset, zoom <factor>, quit): ";
+        std::getline(std::cin, command);
+
+        if (command.find("iterations") != std::string::npos) {
+            int newIterations = std::stoi(command.substr(command.find(' ') + 1));
+            currentMaxIter.store(newIterations);
+            std::cout << "Number of iterations set to " << newIterations << "\n";
+
+            // Redraw the window after changing the iterations
+            InvalidateRect(hwnd, nullptr, TRUE); 
+        }
+        else if (command == "reset") {
+            xMin = initialXMin;
+            xMax = initialXMax;
+            yMin = initialYMin;
+            yMax = initialYMax;
+
+            std::cout << "View reset to initial coordinates.\n";
+
+            // Redraw the window after resetting
+            InvalidateRect(hwnd, nullptr, TRUE); 
+        }
+        else if (command.find("zoom") != std::string::npos) {
+            double zoomFactor = std::stod(command.substr(command.find(' ') + 1));
+
+            // Apply zoom factor
+            long double newWidth = (xMax - xMin) * zoomFactor;
+            long double newHeight = (yMax - yMin) * zoomFactor;
+
+            long double centerX = (xMax + xMin) / 2;
+            long double centerY = (yMax + yMin) / 2;
+
+            xMin = centerX - newWidth / 2;
+            xMax = centerX + newWidth / 2;
+            yMin = centerY - newHeight / 2;
+            yMax = centerY + newHeight / 2;
+
+            std::cout << "Zoom factor applied: " << zoomFactor << "\n";
+            std::cout << "Current center coordinates: (" << centerX << ", " << centerY << ")\n";
+
+            // Redraw the window after zoom
+            InvalidateRect(hwnd, nullptr, TRUE);
+        }
+        else if (command == "quit") {
+            running = false;
+            std::cout << "Exiting program...\n";
+        }
+        else {
+            std::cout << "Unknown command\n";
         }
     }
 }
@@ -63,22 +118,21 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         long double centerX = xMin + (xMax - xMin) * mouseX / WIDTH;
         long double centerY = yMin + (yMax - yMin) * mouseY / HEIGHT;
 
-        long double zoomFactor = 0.1; // Adjust zoom level
+        long double zoomFactor = 0.1;
         long double newWidth = (xMax - xMin) * zoomFactor;
         long double newHeight = (yMax - yMin) * zoomFactor;
 
-        // Apply zoom limit to prevent extreme zooming
-        if (newWidth > MIN_ZOOM) {
-            xMin = centerX - newWidth / 2;
-            xMax = centerX + newWidth / 2;
-            yMin = centerY - newHeight / 2;
-            yMax = centerY + newHeight / 2;
+  
+        long double centerX = (xMax + xMin) / 2;
+        long double centerY = (yMax + yMin) / 2;
 
-            // Print the new center coordinates to the console
-            std::cout << "Current Center Coordinates: (" << centerX << ", " << centerY << ")\n";
-        }
+        xMin = centerX - newWidth / 2;
+        xMax = centerX + newWidth / 2;
+        yMin = centerY - newHeight / 2;
+        yMax = centerY + newHeight / 2;
 
-        InvalidateRect(hwnd, nullptr, TRUE); // Redraw window
+        std::cout << "Current Center Coordinates: (" << centerX << ", " << centerY << ")\n";
+        InvalidateRect(hwnd, nullptr, TRUE); 
         return 0;
     }
     case WM_DESTROY:
@@ -100,7 +154,7 @@ int main() {
 
     RegisterClass(&wc);
 
-    HWND hwnd = CreateWindowEx(
+    hwnd = CreateWindowEx(
         0,
         CLASS_NAME,
         L"Mandelbrot Viewer",
@@ -115,6 +169,9 @@ int main() {
 
     ShowWindow(hwnd, SW_SHOW);
 
+    
+    std::thread inputThread(handleUserInput);
+
     MSG msg = {};
     while (running) {
         while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
@@ -126,6 +183,9 @@ int main() {
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
+
+    
+    inputThread.join();
 
     return 0;
 }
