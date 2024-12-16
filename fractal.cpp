@@ -10,11 +10,12 @@
 
 const int WIDTH = 800;
 const int HEIGHT = 800;
-const int MAX_ITER = 250;
+const int BASE_ITER = 250; // Base iterations for normal zoom level
+const int MAX_ITER = 10000; // Max iterations to prevent runaway values
 
 std::atomic<bool> running(true);
-std::atomic<int> currentMaxIter(MAX_ITER);
-std::atomic<bool> useColor(false); // Default to color mode
+std::atomic<int> currentMaxIter(BASE_ITER);
+std::atomic<bool> useColor(true); // Default to color mode
 
 long double xMin = -2.0, xMax = 1.0;
 long double yMin = -1.5, yMax = 1.5;
@@ -25,6 +26,35 @@ long double initialYMin = -1.5, initialYMax = 1.5;
 HWND hwnd = nullptr;
 
 std::vector<COLORREF> pixelBuffer(WIDTH* HEIGHT); // Off-screen pixel buffer
+
+// Function to calculate the color based on iteration count and max iterations
+COLORREF getColor(int iterations, int maxIter) {
+    if (iterations == maxIter) {
+        return RGB(0, 0, 0);  // Black for points inside the set
+    }
+
+    double t = static_cast<double>(iterations) / maxIter;
+
+    if (useColor.load()) {
+        // Color mode
+        int r = static_cast<int>(9 * (1 - t) * t * t * t * 255);
+        int g = static_cast<int>(15 * (1 - t) * (1 - t) * t * t * 255);
+        int b = static_cast<int>(8.5 * (1 - t) * (1 - t) * (1 - t) * t * 255);
+
+        // Dynamically adjust the color intensity based on the iteration count
+        int maxColorValue = 255;
+        r = (r > maxColorValue) ? maxColorValue : r;
+        g = (g > maxColorValue) ? maxColorValue : g;
+        b = (b > maxColorValue) ? maxColorValue : b;
+
+        return RGB(r, g, b);
+    }
+    else {
+        // Grayscale mode
+        int gray = static_cast<int>(255 * t);
+        return RGB(gray, gray, gray);  // Return grayscale color
+    }
+}
 
 void drawMandelbrot(HDC hdc) {
     const int numThreads = std::thread::hardware_concurrency(); // Get number of available cores
@@ -46,23 +76,8 @@ void drawMandelbrot(HDC hdc) {
                     ++iterations;
                 }
 
-                COLORREF color;
-                if (iterations == dynamicMaxIter) {
-                    color = RGB(0, 0, 0);  // Black for points inside the set
-                }
-                else if (useColor.load()) {
-                    // Color mode
-                    double t = static_cast<double>(iterations) / dynamicMaxIter;
-                    int r = static_cast<int>(9 * (1 - t) * t * t * t * 255);
-                    int g = static_cast<int>(15 * (1 - t) * (1 - t) * t * t * 255);
-                    int b = static_cast<int>(8.5 * (1 - t) * (1 - t) * (1 - t) * t * 255);
-                    color = RGB(r, g, b);
-                }
-                else {
-                    // Grayscale mode
-                    int gray = static_cast<int>(255.0 * iterations / dynamicMaxIter);
-                    color = RGB(gray, gray, gray);
-                }
+                // Use the getColor function to calculate the appropriate color for this point
+                COLORREF color = getColor(iterations, dynamicMaxIter);
 
                 pixelBuffer[py * WIDTH + px] = color;
             }
@@ -94,13 +109,22 @@ void drawMandelbrot(HDC hdc) {
 void handleUserInput() {
     while (running) {
         std::string command;
-        std::cout << "Enter command (iterations <number>, reset, zoom <factor>, toggle, quit): " << "\n";
+        std::cout << "Enter command (iterations <number>, reset, toggle, quit): " << "\n";
         std::getline(std::cin, command);
 
         if (command.find("iterations") != std::string::npos) {
             int newIterations = std::stoi(command.substr(command.find(' ') + 1));
-            currentMaxIter.store(newIterations);
+
+            // Ensure newIterations does not exceed MAX_ITER
+            if (newIterations > MAX_ITER) {
+                newIterations = MAX_ITER;
+            }
+
+            currentMaxIter.store(newIterations, std::memory_order_relaxed);
             std::cout << "Number of iterations set to " << newIterations << "\n";
+
+            // Debug: Output the updated number of iterations
+            std::cout << "Updated Iterations: " << currentMaxIter.load() << "\n";
 
             // Redraw the window
             InvalidateRect(hwnd, nullptr, TRUE);
@@ -112,25 +136,6 @@ void handleUserInput() {
             yMax = initialYMax;
 
             std::cout << "View reset to initial coordinates.\n";
-
-            // Redraw the window
-            InvalidateRect(hwnd, nullptr, TRUE);
-        }
-        else if (command.find("zoom") != std::string::npos) {
-            double zoomFactor = std::stod(command.substr(command.find(' ') + 1));
-
-            long double newWidth = (xMax - xMin) * zoomFactor;
-            long double newHeight = (yMax - yMin) * zoomFactor;
-            long double centerX = (xMax + xMin) / 2;
-            long double centerY = (yMax + yMin) / 2;
-
-            xMin = centerX - newWidth / 2;
-            xMax = centerX + newWidth / 2;
-            yMin = centerY - newHeight / 2;
-            yMax = centerY + newHeight / 2;
-
-            std::cout << "Zoom factor applied: " << zoomFactor << "\n";
-            std::cout << "Current center coordinates: (" << centerX << ", " << centerY << ")\n";
 
             // Redraw the window
             InvalidateRect(hwnd, nullptr, TRUE);
@@ -177,21 +182,20 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         yMin = centerY - newHeight / 2;
         yMax = centerY + newHeight / 2;
 
-        // Set the precision for printing
-        std::cout << std::fixed << std::setprecision(12);  // Adjust precision as needed
-        std::cout << "Current Center Coordinates: (" << centerX << ", " << centerY << ")\n";
+        // Debug: Output the current zoom level and iteration
+        std::cout << "Zoomed to: (" << xMin << ", " << yMin << ") to (" << xMax << ", " << yMax << ")\n";
+        std::cout << "Current Iterations: " << currentMaxIter.load() << "\n";
 
-        // Write coordinates to a text file
-        std::ofstream outFile("coordinates.txt", std::ios::app);  // Open the file in append mode
-        if (outFile.is_open()) {
-            outFile << std::fixed << std::setprecision(12);  // Ensure same precision in file
-            outFile << "Current Center Coordinates: (" << centerX << ", " << centerY << ")\n";
-            outFile.close();
+        // Increase the iterations after zoom
+        int newIterations = currentMaxIter.load() + 250;  // Increase by a fixed amount or modify logic
+        if (newIterations > MAX_ITER) {
+            newIterations = MAX_ITER;
         }
-        else {
-            std::cerr << "Unable to open file for writing coordinates.\n";
-        }
+        currentMaxIter.store(newIterations);
 
+        std::cout << "Updated Iterations after zoom: " << currentMaxIter.load() << "\n";
+
+        // Redraw the window
         InvalidateRect(hwnd, nullptr, TRUE);
         return 0;
     }
