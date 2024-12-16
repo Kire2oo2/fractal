@@ -5,10 +5,12 @@
 #include <atomic>
 #include <iostream>
 #include <string>
+#include <iomanip>
+#include <fstream>
 
 const int WIDTH = 800;
 const int HEIGHT = 800;
-const int MAX_ITER = 1000;
+const int MAX_ITER = 250;
 
 std::atomic<bool> running(true);
 std::atomic<int> currentMaxIter(MAX_ITER);
@@ -37,14 +39,23 @@ void drawMandelbrot(HDC hdc) {
                 ++iterations;
             }
 
-            COLORREF color = iterations == dynamicMaxIter
-                ? RGB(0, 0, 0)
-                : RGB(iterations % 256, iterations % 256, iterations % 256);
+            if (iterations == dynamicMaxIter) {
+                SetPixel(hdc, px, py, RGB(0, 0, 0));  // Black for points inside the set
+            }
+            else {
+                double t = static_cast<double>(iterations) / dynamicMaxIter;
 
-            SetPixel(hdc, px, py, color);
+                // Create a color gradient using RGB values
+                int r = static_cast<int>(9 * (1 - t) * t * t * t * 255);  // Red component
+                int g = static_cast<int>(15 * (1 - t) * (1 - t) * t * t * 255);  // Green component
+                int b = static_cast<int>(8.5 * (1 - t) * (1 - t) * (1 - t) * t * 255);  // Blue component
+
+                SetPixel(hdc, px, py, RGB(r, g, b));
+            }
         }
     }
 }
+
 
 void handleUserInput() {
     while (running) {
@@ -89,8 +100,6 @@ void handleUserInput() {
             std::cout << "Zoom factor applied: " << zoomFactor << "\n";
             std::cout << "Current center coordinates: (" << centerX << ", " << centerY << ")\n";
 
-            // Redraw the window after zoom
-            InvalidateRect(hwnd, nullptr, TRUE);
         }
         else if (command == "quit") {
             running = false;
@@ -127,8 +136,22 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         yMin = centerY - newHeight / 2;
         yMax = centerY + newHeight / 2;
 
+        // Set the precision for printing
+        std::cout << std::fixed << std::setprecision(12);  // Adjust precision as needed
         std::cout << "Current Center Coordinates: (" << centerX << ", " << centerY << ")\n";
-        InvalidateRect(hwnd, nullptr, TRUE); 
+
+        // Write coordinates to a text file
+        std::ofstream outFile("coordinates.txt", std::ios::app);  // Open the file in append mode
+        if (outFile.is_open()) {
+            outFile << std::fixed << std::setprecision(12);  // Ensure same precision in file
+            outFile << "Current Center Coordinates: (" << centerX << ", " << centerY << ")\n";
+            outFile.close();
+        }
+        else {
+            std::cerr << "Unable to open file for writing coordinates.\n";
+        }
+
+        InvalidateRect(hwnd, nullptr, TRUE);
         return 0;
     }
     case WM_DESTROY:
@@ -180,7 +203,6 @@ int main() {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
-    
     inputThread.join();
 
     return 0;
