@@ -14,6 +14,7 @@ const int MAX_ITER = 250;
 
 std::atomic<bool> running(true);
 std::atomic<int> currentMaxIter(MAX_ITER);
+std::atomic<bool> useColor(false); // Default to color mode
 
 long double xMin = -2.0, xMax = 1.0;
 long double yMin = -1.5, yMax = 1.5;
@@ -22,6 +23,7 @@ long double initialXMin = -2.0, initialXMax = 1.0;
 long double initialYMin = -1.5, initialYMax = 1.5;
 
 HWND hwnd = nullptr; 
+
 
 void drawMandelbrot(HDC hdc) {
     for (int px = 0; px < WIDTH; ++px) {
@@ -39,28 +41,35 @@ void drawMandelbrot(HDC hdc) {
                 ++iterations;
             }
 
+            COLORREF color;
             if (iterations == dynamicMaxIter) {
-                SetPixel(hdc, px, py, RGB(0, 0, 0));  // Black for points inside the set
+                color = RGB(0, 0, 0);  // Black for points inside the set
+            }
+            else if (useColor.load()) {
+                // Color mode
+                double t = static_cast<double>(iterations) / dynamicMaxIter;
+                int r = static_cast<int>(9 * (1 - t) * t * t * t * 255);
+                int g = static_cast<int>(15 * (1 - t) * (1 - t) * t * t * 255);
+                int b = static_cast<int>(8.5 * (1 - t) * (1 - t) * (1 - t) * t * 255);
+                color = RGB(r, g, b);
             }
             else {
-                double t = static_cast<double>(iterations) / dynamicMaxIter;
-
-                // Create a color gradient using RGB values
-                int r = static_cast<int>(9 * (1 - t) * t * t * t * 255);  // Red component
-                int g = static_cast<int>(15 * (1 - t) * (1 - t) * t * t * 255);  // Green component
-                int b = static_cast<int>(8.5 * (1 - t) * (1 - t) * (1 - t) * t * 255);  // Blue component
-
-                SetPixel(hdc, px, py, RGB(r, g, b));
+                // Grayscale mode
+                int gray = static_cast<int>(255.0 * iterations / dynamicMaxIter);
+                color = RGB(gray, gray, gray);
             }
+
+            SetPixel(hdc, px, py, color);
         }
     }
 }
 
 
+
 void handleUserInput() {
     while (running) {
         std::string command;
-        std::cout << "Enter command (iterations <number>, reset, zoom <factor>, quit): ";
+        std::cout << "Enter command (iterations <number>, reset, zoom <factor>, toggle, quit): ";
         std::getline(std::cin, command);
 
         if (command.find("iterations") != std::string::npos) {
@@ -68,8 +77,8 @@ void handleUserInput() {
             currentMaxIter.store(newIterations);
             std::cout << "Number of iterations set to " << newIterations << "\n";
 
-            // Redraw the window after changing the iterations
-            InvalidateRect(hwnd, nullptr, TRUE); 
+            // Redraw the window
+            InvalidateRect(hwnd, nullptr, TRUE);
         }
         else if (command == "reset") {
             xMin = initialXMin;
@@ -79,16 +88,14 @@ void handleUserInput() {
 
             std::cout << "View reset to initial coordinates.\n";
 
-            // Redraw the window after resetting
-            InvalidateRect(hwnd, nullptr, TRUE); 
+            // Redraw the window
+            InvalidateRect(hwnd, nullptr, TRUE);
         }
         else if (command.find("zoom") != std::string::npos) {
             double zoomFactor = std::stod(command.substr(command.find(' ') + 1));
 
-            // Apply zoom factor
             long double newWidth = (xMax - xMin) * zoomFactor;
             long double newHeight = (yMax - yMin) * zoomFactor;
-
             long double centerX = (xMax + xMin) / 2;
             long double centerY = (yMax + yMin) / 2;
 
@@ -100,6 +107,15 @@ void handleUserInput() {
             std::cout << "Zoom factor applied: " << zoomFactor << "\n";
             std::cout << "Current center coordinates: (" << centerX << ", " << centerY << ")\n";
 
+            // Redraw the window
+            InvalidateRect(hwnd, nullptr, TRUE);
+        }
+        else if (command == "toggle") {
+            useColor.store(!useColor.load());
+            std::cout << "Toggled to " << (useColor.load() ? "color" : "grayscale") << " mode.\n";
+
+            // Redraw the window
+            InvalidateRect(hwnd, nullptr, TRUE);
         }
         else if (command == "quit") {
             running = false;
@@ -110,6 +126,7 @@ void handleUserInput() {
         }
     }
 }
+
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
