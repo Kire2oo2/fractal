@@ -22,54 +22,79 @@ long double yMin = -1.5, yMax = 1.5;
 long double initialXMin = -2.0, initialXMax = 1.0;
 long double initialYMin = -1.5, initialYMax = 1.5;
 
-HWND hwnd = nullptr; 
+HWND hwnd = nullptr;
 
+std::vector<COLORREF> pixelBuffer(WIDTH* HEIGHT); // Off-screen pixel buffer
 
 void drawMandelbrot(HDC hdc) {
-    for (int px = 0; px < WIDTH; ++px) {
-        for (int py = 0; py < HEIGHT; ++py) {
-            long double x0 = xMin + (xMax - xMin) * px / WIDTH;
-            long double y0 = yMin + (yMax - yMin) * py / HEIGHT;
+    const int numThreads = std::thread::hardware_concurrency(); // Get number of available cores
+    const int rowsPerThread = HEIGHT / numThreads;
 
-            std::complex<long double> c(x0, y0);
-            std::complex<long double> z(0, 0);
-            int iterations = 0;
+    auto drawRegion = [&](int startRow, int endRow) {
+        for (int px = 0; px < WIDTH; ++px) {
+            for (int py = startRow; py < endRow; ++py) {
+                long double x0 = xMin + (xMax - xMin) * px / WIDTH;
+                long double y0 = yMin + (yMax - yMin) * py / HEIGHT;
 
-            int dynamicMaxIter = currentMaxIter.load();
-            while (std::abs(z) <= 2.0 && iterations < dynamicMaxIter) {
-                z = z * z + c;
-                ++iterations;
-            }
+                std::complex<long double> c(x0, y0);
+                std::complex<long double> z(0, 0);
+                int iterations = 0;
 
-            COLORREF color;
-            if (iterations == dynamicMaxIter) {
-                color = RGB(0, 0, 0);  // Black for points inside the set
-            }
-            else if (useColor.load()) {
-                // Color mode
-                double t = static_cast<double>(iterations) / dynamicMaxIter;
-                int r = static_cast<int>(9 * (1 - t) * t * t * t * 255);
-                int g = static_cast<int>(15 * (1 - t) * (1 - t) * t * t * 255);
-                int b = static_cast<int>(8.5 * (1 - t) * (1 - t) * (1 - t) * t * 255);
-                color = RGB(r, g, b);
-            }
-            else {
-                // Grayscale mode
-                int gray = static_cast<int>(255.0 * iterations / dynamicMaxIter);
-                color = RGB(gray, gray, gray);
-            }
+                int dynamicMaxIter = currentMaxIter.load();
+                while (std::abs(z) <= 2.0 && iterations < dynamicMaxIter) {
+                    z = z * z + c;
+                    ++iterations;
+                }
 
-            SetPixel(hdc, px, py, color);
+                COLORREF color;
+                if (iterations == dynamicMaxIter) {
+                    color = RGB(0, 0, 0);  // Black for points inside the set
+                }
+                else if (useColor.load()) {
+                    // Color mode
+                    double t = static_cast<double>(iterations) / dynamicMaxIter;
+                    int r = static_cast<int>(9 * (1 - t) * t * t * t * 255);
+                    int g = static_cast<int>(15 * (1 - t) * (1 - t) * t * t * 255);
+                    int b = static_cast<int>(8.5 * (1 - t) * (1 - t) * (1 - t) * t * 255);
+                    color = RGB(r, g, b);
+                }
+                else {
+                    // Grayscale mode
+                    int gray = static_cast<int>(255.0 * iterations / dynamicMaxIter);
+                    color = RGB(gray, gray, gray);
+                }
+
+                pixelBuffer[py * WIDTH + px] = color;
+            }
         }
+        };
+
+    std::vector<std::thread> threads;
+    for (int i = 0; i < numThreads; ++i) {
+        int startRow = i * rowsPerThread;
+        int endRow = (i == numThreads - 1) ? HEIGHT : (i + 1) * rowsPerThread;
+        threads.emplace_back(drawRegion, startRow, endRow);
     }
+
+    for (auto& t : threads) {
+        t.join();
+    }
+
+    // Once drawing is complete, blit the buffer to the screen
+    HBITMAP hBitmap = CreateBitmap(WIDTH, HEIGHT, 1, 32, pixelBuffer.data());
+    HDC hdcMem = CreateCompatibleDC(hdc);
+    SelectObject(hdcMem, hBitmap);
+
+    BitBlt(hdc, 0, 0, WIDTH, HEIGHT, hdcMem, 0, 0, SRCCOPY);
+
+    DeleteDC(hdcMem);
+    DeleteObject(hBitmap);
 }
-
-
 
 void handleUserInput() {
     while (running) {
         std::string command;
-        std::cout << "Enter command (iterations <number>, reset, zoom <factor>, toggle, quit): ";
+        std::cout << "Enter command (iterations <number>, reset, zoom <factor>, toggle, quit): " << "\n";
         std::getline(std::cin, command);
 
         if (command.find("iterations") != std::string::npos) {
@@ -126,7 +151,6 @@ void handleUserInput() {
         }
     }
 }
-
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam) {
     switch (uMsg) {
@@ -205,7 +229,6 @@ int main() {
 
     ShowWindow(hwnd, SW_SHOW);
 
-    
     std::thread inputThread(handleUserInput);
 
     MSG msg = {};
